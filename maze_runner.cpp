@@ -1,9 +1,9 @@
-#include <iostream>
 #include <fstream>
 #include <vector>
-#include <stack>
 #include <thread>
 #include <chrono>
+#include <mutex>
+#include <iostream>
 
 // Representação do labirinto
 using Maze = std::vector<std::vector<char>>;
@@ -18,7 +18,8 @@ struct Position {
 Maze maze;
 int num_rows;
 int num_cols;
-std::stack<Position> valid_positions;
+std::mutex maze_mutex;  // Mutex para proteger o acesso ao labirinto compartilhado
+bool exit_found = false; // Variável global para marcar se a saída foi encontrada
 
 // Função para carregar o labirinto de um arquivo
 Position load_maze(const std::string& file_name) {
@@ -28,23 +29,18 @@ Position load_maze(const std::string& file_name) {
         std::exit(-1);
     }
 
-    // 1. Leia o número de linhas e colunas do labirinto
     labirinto >> num_rows >> num_cols;
-
-    // 2. Redimensione a matriz 'maze' de acordo
     maze.resize(num_rows);
     for (int i = 0; i < num_rows; i++) {
         maze[i].resize(num_cols);
     }
 
-    // 3. Leia o conteúdo do labirinto do arquivo, caractere por caractere
     for (int i = 0; i < num_rows; i++) {
         for (int j = 0; j < num_cols; j++) {
             labirinto >> maze[i][j];
         }
     }
 
-    // 4. Encontre e retorne a posição inicial ('e')
     for (int i = 0; i < num_rows; i++) {
         for (int j = 0; j < num_cols; j++) {
             if (maze[i][j] == 'e') {
@@ -54,7 +50,7 @@ Position load_maze(const std::string& file_name) {
     }
 
     labirinto.close();
-    return {-1, -1}; // Retorno em caso de erro
+    return {-1, -1};
 }
 
 // Função para imprimir o labirinto
@@ -69,9 +65,7 @@ void print_maze() {
 
 // Função para verificar se uma posição é válida
 bool is_valid_position(int row, int col) {
-    // 1. Verifique se a posição está dentro dos limites do labirinto
     if (row >= 0 && row < num_rows && col >= 0 && col < num_cols) {
-        // 2. A posição é válida se for 'x', 's' ou 'e'
         if (maze[row][col] == 'x' || maze[row][col] == 's' || maze[row][col] == 'e') {
             return true;
         }
@@ -79,16 +73,20 @@ bool is_valid_position(int row, int col) {
     return false;
 }
 
-// Função principal para navegar pelo labirinto
-bool walk(Position pos) {
-    // Verifica se a posição atual é a saída
-    if (maze[pos.row][pos.col] == 's') {
-        return true;
+// Função principal para navegar pelo labirinto usando threads
+void walk(Position pos) {
+    {
+        std::lock_guard<std::mutex> lock(maze_mutex);
+        if (exit_found) return;  // Se a saída já foi encontrada por outra thread, encerra
+        if (maze[pos.row][pos.col] == 's') { // Verifica se é a saída
+            exit_found = true;
+            return;
+        }
+
+        maze[pos.row][pos.col] = '.'; // Marca o labirinto como visitado
+        print_maze();
     }
 
-    // Marca a posição como visitada
-    maze[pos.row][pos.col] = '.';
-    print_maze(); // Mostra o estado atual do labirinto
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     // Movimentos possíveis
@@ -99,21 +97,23 @@ bool walk(Position pos) {
         {pos.row, pos.col + 1}   // Direita
     };
 
-    for (auto i : adjacentes) {
-        if (is_valid_position(i.row, i.col)) {
-            valid_positions.push(i);
+    std::vector<std::thread> threads;
+
+    for (auto& next : adjacentes) {
+        if (is_valid_position(next.row, next.col)) {
+            std::lock_guard<std::mutex> lock(maze_mutex);
+            if (exit_found) return; // Verifica se outra thread já encontrou a saída
+            maze[next.row][next.col] = '.'; // Marca a posição como visitada antes de iniciar a thread
+            threads.emplace_back(walk, next); // Cria uma nova thread para explorar o caminho
         }
     }
 
-    // Explora posições válidas na pilha
-    while (!valid_positions.empty()) {
-        Position proxima = valid_positions.top();
-        valid_positions.pop();
-        if (walk(proxima)) {
-            return true;
+    // Espera todas as threads criadas terminarem
+    for (auto& th : threads) {
+        if (th.joinable()) {
+            th.join();
         }
     }
-    return false;
 }
 
 int main(int argc, char* argv[]) {
@@ -128,29 +128,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    bool exit_found = walk(initial_pos);
+    // Inicia a primeira thread a partir da posição inicial
+    std::thread main_thread(walk, initial_pos);
+    main_thread.join();
 
-    if (exit_found) {
+     if (exit_found=true) {
         std::cout << "Saída encontrada!" << std::endl;
-    } else {
-        std::cout << "Não foi possível encontrar a saída." << std::endl;
-    }
+    } //else {
+        //std::cout << "Não foi possível encontrar a saída." << std::endl;
+       // }
 
     return 0;
 }
-// Nota sobre o uso de std::this_thread::sleep_for:
-// 
-// A função std::this_thread::sleep_for é parte da biblioteca <thread> do C++11 e posteriores.
-// Ela permite que você pause a execução do thread atual por um período especificado.
-// 
-// Para usar std::this_thread::sleep_for, você precisa:
-// 1. Incluir as bibliotecas <thread> e <chrono>
-// 2. Usar o namespace std::chrono para as unidades de tempo
-// 
-// Exemplo de uso:
-// std::this_thread::sleep_for(std::chrono::milliseconds(50));
-// 
-// Isso pausará a execução por 50 milissegundos.
-// 
-// Você pode ajustar o tempo de pausa conforme necessário para uma melhor visualização
-// do processo de exploração do labirinto.
+
